@@ -1,6 +1,6 @@
 # WideStochNet
 
-This repository contains PyTorch code for the paper <a href="https://arxiv.org/---">Wide Stochastic Networks</a>.
+This repository contains PyTorch code for the paper <a href="https://arxiv.org/abs/2106.09798">Wide Stochastic Networks</a>.
 
 A new PAC-Bayesian training method is implemented.
 
