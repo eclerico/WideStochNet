@@ -1,12 +1,11 @@
-from network import Net, StochNet
-from datasets import ToyData, MNISTData
-import tools
-from tools import Print
+from WSN.network import Net
+from WSN.datasets import ToyData, MNISTData
+import WSN.tools as tools
+from WSN.tools import Print
 
 import torch
-import numpy as np
 
-import os, sys
+import os
 from time import strftime
 
 #set output dir
@@ -43,7 +42,7 @@ SNN.GaussBound(TL)
 SNN.PrintBound(TL, N_nets=10000, repeat_limit=100)
 
 #StochNet on MNIST
-DATA = MNISTData() #use MNISTData(binary=True) for binary MNIT
+DATA = MNISTData(binary=True) #use MNISTData(binary=False) for full MNIST (10 labels)
 classes = DATA.classes
 n_features = DATA.n_features
 TL = DATA.TrainLoader
@@ -52,8 +51,7 @@ width = 1200
 NN = Net(out_features=classes, in_features=n_features, width=width, act_fct='relu') #network with relu activation
 SNN = NN.StochSon(name = 'SN_MNIST')
 
-loss, KL, bound = SNN.TrainingSchedule(TL, EPOCH, LR, track=True, gauss=False, method='lbd') #training with standard method 'S lbd'
+loss, KL, bound = SNN.TrainingSchedule(TL, EPOCH, LR, track=True, gauss=False, method='lbd') #training with method 'S lbd'
 SNN.Save()
 SNN.GaussBound(TL)
 SNN.PrintBound(TL, N_nets=10000, repeat_limit=100)
-

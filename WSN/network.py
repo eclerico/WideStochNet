@@ -1,7 +1,5 @@
-import sys, os
-from shutil import rmtree
+import os
 from time import strftime
-import pickle
 
 import torch
 import torch.nn as nn
@@ -11,18 +9,18 @@ from torch.nn.parameter import Parameter
 import math
 import numpy as np
 
-from tools import inv_KL, inv_KL_torch, Print, save_lists, __OUT_DIR__
-from activations import __act__
-from loss import Expected01Bin, Expected01
+from WSN.tools import inv_KL, inv_KL_torch, Print, save_lists, __OUT_DIR__
+from WSN.activations import __act__
+from WSN.loss import Expected01Bin, Expected01
 
 __methods__ = ['std', 'invKL', 'quad', 'lbd']
 
 """
-StochBlock is the module that representing a stochastic layer.
+StochBlock is the module that represents a stochastic layer.
 
 INPUT
 mother: nn.Linear block
-device: toch.device
+device: torch.device
 
 MAIN ATTRIBUTES
 in_features, out_features: as in nn.Linear
@@ -189,6 +187,7 @@ StochSon: makes a StochNet centered on the model
 
 class Net(GhostNet):
 
+
   def __init__(self, in_features, out_features, width = 1000, depth=1, act_fct = 'relu', device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
     assert act_fct in __act__, f"{act_fct} is not a valid activation function."
     self.device = device
@@ -199,19 +198,19 @@ class Net(GhostNet):
     self.width = width
     self.depth = depth
     super(Net, self).__init__()
-    first_layer = nn.Linear(in_features=self.in_features, out_features=self.width)
+    first_layer = nn.Linear(in_features=self.in_features, out_features=self.width, bias=False)
     first_layer.l_nb = 0
     first_layer.act = None
     first_layer.depth = self.depth
     self.add_layer('lin0', first_layer)
     for idx in range(1, self.depth):
       l_name = f'lin{idx}'
-      layer = nn.Linear(in_features=self.width, out_features=self.width)
+      layer = nn.Linear(in_features=self.width, out_features=self.width, bias=False)
       layer.l_nb = idx
       layer.act = self.act
       layer.depth = self.depth
       self.add_layer(l_name, layer)
-    last_layer = nn.Linear(in_features=self.width,  out_features=self.out_features)
+    last_layer = nn.Linear(in_features=self.width,  out_features=self.out_features, bias=False)
     last_layer.l_nb = self.depth
     last_layer.act = self.act
     last_layer.depth = self.depth
@@ -223,21 +222,21 @@ class Net(GhostNet):
   def mirror(selfie, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
     return Net(**selfie, device=device)
 
-  def StochSon(self, delta=.025, name='SNN'):
-    return StochNet(mother=self, delta=delta, name=name)
+  def StochSon(self, delta=.025, name='SNN', beta=False):
+    return StochNet(mother=self, delta=delta, name=name, beta=beta)
 
 
 
-  
 """
 StochNet is the stochastic version of Net, created by Net.StochSon.
 Each linear block is converted in a StochBlock module.
 It is a subclass of GhostNet, the structure of the forward method comes from there.
-Implemented only for depth=1 (single hidden layer).
+Implemented only for depth=1 (single hidden layer), unless using beta version.
 
 INPUTS
 mother: the model to be made stochastic
 delta: PAC parameter delta for the bound (default .025)
+beta: if True uses beta version and allows multilayer Net as mother (default False)
 
 MAIN ATTRIBUTES
 width, depth, delta, in_features, out_features
@@ -259,9 +258,11 @@ PrintBound: PAC-Bayes bound
 GaussBound: PAC-Bayes bound evaluated assuming the exactness of the Gaussian approximation
 OutLaw: for a single input returns {repeat} outputs obtained via independent realizations of the network
 """
+
 class StochNet(GhostNet, nn.Module):
 
-  def __init__(self, mother, delta=.025, name='SNN'):
+
+  def __init__(self, mother, delta=.025, name='SNN', beta=False):
     super(StochNet, self).__init__()
     self.name = name
     self.mother_state = mother.state_dict()
@@ -272,7 +273,9 @@ class StochNet(GhostNet, nn.Module):
     self.out_features = mother.out_features
     self.width = mother.width
     self.depth = mother.depth
-    assert self.depth == 1, "Multilayer StochNet not implemented."
+    self.beta = beta
+    if not beta: assert self.depth == 1, "Multilayer StochNet not implemented."
+    else: Print('Warning: Creating a beta StochNet {name}, Gaussian training not available')
     self.dim = 0
     self.best = 1.
     layers = mother._modules
@@ -289,7 +292,8 @@ class StochNet(GhostNet, nn.Module):
   def mirror(info, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"), name='SNN'):
     M = Net.mirror(info['selfie'], device=device)
     M.load_state_dict(info['mother'])
-    SNN = M.StochSon(info['delta'], name=name)
+    if 'beta' not in info.keys(): info['beta'] = False #for compatibility issues with previous version where beta was not defined
+    SNN = M.StochSon(info['delta'], name=name, beta = info['beta'])
     SNN.Lambda = torch.tensor([info['Lambda']], device=device, requires_grad=True, dtype=torch.float32)
     return SNN
 
@@ -298,7 +302,8 @@ class StochNet(GhostNet, nn.Module):
       'selfie': self.selfie(),
       'mother': self.mother_state,
       'delta': self.delta,
-      'Lambda': self.Lambda.item()
+      'Lambda': self.Lambda.item(),
+      'beta': self.beta
     }
 
   def Save(self, name=None, path=None, timestamp = None):
@@ -316,6 +321,7 @@ class StochNet(GhostNet, nn.Module):
     dict_path = os.path.join(dirpath, 'state_dict')
     torch.save(self.state_dict(), dict_path)
     torch.save(self.info(), info_path)
+    return dirpath
 
   @staticmethod
   def Load(path, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"), name='SNN'):
@@ -384,6 +390,7 @@ class StochNet(GhostNet, nn.Module):
   no_save: if False and track is True, the best configuration found of the networks is automatically saved
   """
   def GaussTrain(self, dataloader, epoch, lr, multi=False, samples=10**4, track=False, method='invKL', penalty=1, pmin=None, lbd_in=None, lr_lbd=0.001, track_lbd=False, no_save=False, timestamp=None):
+    assert not self.beta, "Gauss methods not available for beta StochNet"
     assert method in __methods__
     Print(f'Training started -- Epochs: {epoch} -- lr: {lr} -- method: {method}')
     if track:
@@ -489,6 +496,7 @@ class StochNet(GhostNet, nn.Module):
 
   def Train(self, dataloader, epoch, lr, track=False, method='std', pmin=None, penalty=1, lbd_in=0.5, lr_lbd=0.001, track_lbd=False, samples=10**4, no_save=False, timestamp=None):
     assert method in __methods__
+    if track: assert not self.beta, 'No tracking available in training of StochNet'
     Print(f'Training started -- epochs: {epoch} -- lr: {lr} -- method: {method}')
     train_size = sum([len(data) for data, _ in dataloader])
     optimizer = torch.optim.SGD(self.parameters(), lr=lr, momentum=0.9)
@@ -583,6 +591,7 @@ class StochNet(GhostNet, nn.Module):
     if track_lbd: return lbd_list
 
   def GaussTest(self, dataloader, quiet=False):
+    assert not self.beta, "Gauss methods not available for beta StochNet"
     tot_loss = 0.
     total = 0
     if self.out_features==2: Loss = lambda x, y: Expected01Bin(self, x, y)
@@ -650,12 +659,12 @@ class StochNet(GhostNet, nn.Module):
     total = 0
     current_rep = 0
     with torch.no_grad():
-      for idx, (data, target) in enumerate(dataloader):
-        for rep in repeat_list:
+      for rep in repeat_list:
+        current_rep += rep
+        for idx, (data, target) in enumerate(dataloader):
           outputs = self._batch_out_law(data, rep)
           guess = torch.max(outputs, -1)[1]
           total += rep*target.size(0)
-          current_rep += rep
           correct += (guess == target.unsqueeze(0)).sum().item()
           if not quiet: Print(f'Batch {idx+1} of {len(dataloader)} --- Rep {current_rep} of {repeat} --- Current average score {correct/total:.5e}')
       emp_loss = 1 - correct/total
@@ -668,12 +677,43 @@ class StochNet(GhostNet, nn.Module):
     Print(f'With P >= {1-self.delta-deltap} the true error is bounded by {bound}')
     return bound
 
-  def GaussBound(self, dataloader, train_size=None):
+  def TestError(self, dataloader, N_nets=1000, repeat_limit=None, quiet=True, std=True):
+    #if the gpu is not large enough, use a small repeat_limit
+    #for each batch per each repetition a single realization of the stochastic network is used
+    repeat = N_nets
+    if repeat_limit is None: repeat_limit = repeat
+    else: repeat_limit = min(repeat, repeat_limit)
+    repeat_list = (repeat // repeat_limit) * [repeat_limit]
+    reminder = repeat % repeat_limit
+    if reminder > 0: repeat_list.append(reminder)
+    current_rep = 0
+    SCORES = torch.tensor([], device=self.device)
     with torch.no_grad():
-      emp_score = 0.
+      for rep in repeat_list:
+        current_rep += rep
+        scores = torch.zeros(rep, device=self.device)
+        total_size = 0
+        for idx, (data, target) in enumerate(dataloader):
+          batch_size = target.size(0)
+          outputs = self._batch_out_law(data, rep)
+          guess = torch.max(outputs, -1)[1]
+          total_size += batch_size
+          scores += (guess == target.unsqueeze(0)).sum(1)
+          if not quiet: Print(f'Batch {idx+1} of {len(dataloader)} --- Rep {current_rep} of {repeat}')
+        SCORES = torch.cat((SCORES, scores/total_size))
+        Print(f'Repetitions: {current_rep} of {repeat} --- Estimated test loss: {1-SCORES.mean()}')
+      error_mean = 1 - SCORES.mean().item()
+      if std:
+        error_std = SCORES.std().item()
+        return error_mean, error_std
+      else: return error_mean
+
+  def GaussBound(self, dataloader, train_size=None, emp_loss=None):
+    assert not self.beta, "Gauss methods not available for beta StochNet"
+    with torch.no_grad():
       if train_size is None:
         train_size = sum([len(data) for data, _ in dataloader])
-      emp_loss = self.GaussTest(dataloader)
+      if emp_loss is None: emp_loss = self.GaussTest(dataloader)
       penalty = self.Penalty(train_size).item()
       bound = inv_KL(emp_loss, penalty)
     Print(f'Penalty {penalty}')
@@ -681,18 +721,5 @@ class StochNet(GhostNet, nn.Module):
     Print(f'If the Gaussian approximation is exact, with P >= {1-self.delta} the true error is bounded by {bound}')
     return bound
 
-if __name__ == '__main__':
 
-  from datasets import ToyData, MNISTData
-  DATA = MNISTData(binary=True)
-  #DATA = ToyData(n_features=3, classes=2)
-  x, y = DATA.Next()
-  X, Y = next(iter(DATA.TrainLoader))
-  TL = DATA.TrainLoader
-  
-  in_features = DATA.n_features
-  out_features = DATA.classes
 
-  NN = Net(in_features = in_features, out_features = out_features, width = 100, depth = 1, act_fct='sin')
-  SNN = NN.StochSon()
-  print('ok')

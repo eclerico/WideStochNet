@@ -2,6 +2,7 @@ import torch
 
 def Expected01Bin(SNN, input, target):
   assert SNN.out_features == 2
+  assert not SNN.beta, 'Expected01Bin not implemented for beta StochNet'
   M, Q = SNN.GetMQ(input)
   #MM = M0(x) - M1(x) batchwise
   MM = (M * torch.tensor([1, -1], device=SNN.device)).sum(-1)
@@ -13,6 +14,7 @@ def Expected01Bin(SNN, input, target):
 
 def Expected01(SNN, input, target, samples=10**4): #input: [batch, classes], target : [batch]
   classes = SNN.out_features
+  assert not SNN.beta, 'Expected01 not implemented for beta StochNet'
   M, Q = SNN.GetMQ(input) #Q : [batch, classes, classes], M : [batch, classes]
   perm = _mk_perm(classes, device=SNN.device) #perm : [classes, classes, classes]
   PERM = perm[target] #PERM : [batch, classes, classes]

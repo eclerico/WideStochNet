@@ -1,12 +1,9 @@
 import torch
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset
 
 import numpy as np
 
 from sklearn.datasets import make_blobs
-from sklearn.cluster import KMeans
-
-from torch import tensor as Tensor
 from torchvision.datasets import MNIST
 
     
